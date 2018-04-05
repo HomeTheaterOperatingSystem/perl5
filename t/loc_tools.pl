@@ -119,10 +119,13 @@ sub _trylocale ($$$$) { # For use only by other functions in this file!
     # to, the return from setlocale() indicates that it has taken effect, even
     # if it hasn't.  However, the return from querying LC_ALL won't reflect
     # this.
-    if ($Config{osname} eq 'openbsd' && $locale !~ / ^ C | POSIX $/ix) {
-        my ($major, $minor) =~ $Config{osvers} =~ / ^ ( \d+ ) \. ( \d+ ) /x;
-        return if $major < 6 || ($major == 6 && $minor <= 3);
+    #use re qw(Debug ALL);
+    if ($Config{osname} =~ /openbsd/i && $locale !~ / ^ (?: C | POSIX ) $/ix) {
+        my ($major, $minor) = $Config{osvers} =~ / ^ ( \d+ ) \. ( \d+ ) /ax;
+        return if ! defined $major || ! defined $minor
+                         || $major < 6 || ($major == 6 && $minor <= 3);
     }
+    no re;
 
     $categories = [ $categories ] unless ref $categories;
 
@@ -538,6 +541,8 @@ sub _source_location {
 
     return ($loc =~ /^(.*)$/)[0]; # untaint
 }
+
+#print STDERR join "\n", find_locales('LC_ALL');
 
 1
 
