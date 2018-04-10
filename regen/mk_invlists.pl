@@ -1,4 +1,7 @@
 #!perl -w
+$|=1;
+# XXX keep popular tables together;
+                    use Data::Dumper;
 use 5.015;
 use strict;
 use warnings;
@@ -11,6 +14,7 @@ use Unicode::UCD qw(prop_aliases
                    );
 require './regen/regen_lib.pl';
 require './regen/charset_translations.pl';
+require './lib/unicore/Heavy.pl';
 
 # This program outputs charclass_invlists.h, which contains various inversion
 # lists in the form of C arrays that are to be used as-is for inversion lists.
@@ -30,6 +34,9 @@ my $VERSION_DATA_STRUCTURE_TYPE = 148565664;
 
 # integer or float
 my $numeric_re = qr/ ^ -? \d+ (:? \. \d+ )? $ /ax;
+
+my @keywords;
+my $table_name_prefix = "PL_";
 
 # Matches valid C language enum names: begins with ASCII alphabetic, then any
 # ASCII \w
@@ -70,6 +77,14 @@ my @wb_short_enums;
 my %wb_abbreviations;
 
 my @a2n;
+
+my %prop_name_aliases;
+# Invert this hash so that for each canonical name, we get a list of things
+# that map to it (excluding itself)
+foreach my $name (sort keys %utf8::loose_property_name_of) {
+    my $canonical = $utf8::loose_property_name_of{$name};
+    push @{$prop_name_aliases{$canonical}},  $name if $canonical ne $name;
+}
 
 sub uniques {
     # Returns non-duplicated input values.  From "Perl Best Practices:
@@ -112,8 +127,9 @@ sub switch_pound_if ($$) {
     $new_pound_if = join "", @new_pound_if;
 
     # Exit current #if if the new one is different from the old
+    print STDERR __LINE__, ": $in_file_pound_if => $new_pound_if\n";
     if (   $in_file_pound_if
-        && $in_file_pound_if !~ /$new_pound_if/)
+        && $in_file_pound_if ne $new_pound_if)
     {
         end_file_pound_if;
     }
@@ -136,6 +152,7 @@ sub output_invlist ($$;$) {
     die "No inversion list for $name" unless defined $invlist
                                              && ref $invlist eq 'ARRAY';
 
+    print STDERR "Making invlist for $name\n";
     # Output the inversion list $invlist using the name $name for it.
     # It is output in the exact internal form for inversion lists.
 
@@ -601,7 +618,9 @@ sub output_invmap ($$$$$$$) {
         } # End of special handling of scx
     }
     else {
-        die "'$input_format' invmap() format for '$prop_name' unimplemented";
+        print STDERR "'$input_format' invmap() format for '$prop_name' unimplemented\n";
+        #die "'$input_format' invmap() format for '$prop_name' unimplemented";
+        return;
     }
 
     die "No inversion map for $prop_name" unless defined $invmap
@@ -625,6 +644,7 @@ sub output_invmap ($$$$$$$) {
         else {
         $element = $full_element_name if defined $full_element_name;
         $element = $name_prefix . $element;
+        print STDERR __LINE__, ": $prop_name, $element\n" unless defined $name_prefix;
         }
         print $out_fh "\t$element";
         print $out_fh "," if $i < $count - 1;
@@ -662,6 +682,7 @@ sub mk_invlist_from_sorted_cp_list {
 # properties we need.
 my ($cp_ref, $folds_ref, $format, $default) = prop_invmap("Case_Folding");
 die "Could not find inversion map for Case_Folding" unless defined $format;
+#XXX
 die "Incorrect format '$format' for Case_Folding inversion map"
                                                     unless $format eq 'al'
                                                            || $format eq 'a';
@@ -880,6 +901,23 @@ sub prop_name_for_cmp ($) { # Sort helper
 sub UpperLatin1 {
     my @return = mk_invlist_from_sorted_cp_list([ 128 .. 255 ]);
     return \@return;
+}
+
+sub expand_invlist {
+    my $invlist_ref = shift;
+    my $i;
+    my @full_list;
+
+    for (my $i = 0; $i < @$invlist_ref; $i += 2) {
+        my $upper = ($i + 1) < @$invlist_ref
+                    ? $invlist_ref->[$i+1] - 1      # In range
+                    : $Unicode::UCD::MAX_CP;  # To infinity.
+        for my $j ($invlist_ref->[$i] .. $upper) {
+            push @full_list, $j;
+        }
+    }
+
+    return @full_list;
 }
 
 sub output_table_common {
@@ -2026,6 +2064,17 @@ sub output_WB_table() {
                         \@wb_table, \@wb_short_enums, \%wb_abbreviations);
 }
 
+sub sanitize_name ($) {
+    my $sanitized = shift;
+    $sanitized =~ s/=/__/;
+    $sanitized =~ s/&/_AMP_/;
+    $sanitized =~ s/\./_DOT_/;
+    $sanitized =~ s/-/_MINUS_/;
+    $sanitized =~ s!/!_SLASH_!;
+
+    return $sanitized;
+}
+
 output_invlist("Latin1", [ 0, 256 ]);
 output_invlist("AboveLatin1", [ 256 ]);
 
@@ -2064,33 +2113,10 @@ for my $charset (get_supported_code_pages()) {
     # These are extra enums to add to those found in the Unicode tables.
     no warnings 'qw';
                          # Ignore non-alpha in sort
-    for my $prop (sort { prop_name_for_cmp($a) cmp prop_name_for_cmp($b) } qw(
-                             Assigned
-                             ASCII
-                             Cased
-                             VertSpace
-                             XPerlSpace
-                             XPosixAlnum
-                             XPosixAlpha
-                             XPosixBlank
-                             XPosixCntrl
-                             XPosixDigit
-                             XPosixGraph
-                             XPosixLower
-                             XPosixPrint
-                             XPosixPunct
-                             XPosixSpace
-                             XPosixUpper
-                             XPosixWord
-                             XPosixXDigit
-                             _Perl_Any_Folds
+    my @props;
+    push @props, sort { prop_name_for_cmp($a) cmp prop_name_for_cmp($b) } qw(
                              &NonL1_Perl_Non_Final_Folds
-                             _Perl_Folds_To_Multi_Char
                              &UpperLatin1
-                             _Perl_IDStart
-                             _Perl_IDCont
-                             _Perl_Charname_Begin
-                             _Perl_Charname_Continue
                              _Perl_GCB,E_Base,E_Base_GAZ,E_Modifier,Glue_After_Zwj,LV,Prepend,Regional_Indicator,SpacingMark,ZWJ,EDGE
                              _Perl_LB,Close_Parenthesis,Hebrew_Letter,Next_Line,Regional_Indicator,ZWJ,Contingent_Break,E_Base,E_Modifier,H2,H3,JL,JT,JV,Word_Joiner,EDGE,
                              _Perl_SB,SContinue,CR,Extend,LF,EDGE
@@ -2102,7 +2128,7 @@ for my $charset (get_supported_code_pages()) {
                              Simple_Case_Folding
                              Case_Folding
                             &_Perl_IVCF
-                           )
+                           );
                            # NOTE that the convention is that extra enum
                            # values come after the property name, separated by
                            # commas, with the enums that aren't ever defined
@@ -2110,7 +2136,68 @@ for my $charset (get_supported_code_pages()) {
                            # characters.  The others are enum names that are
                            # needed by perl, but aren't in all Unicode
                            # releases.
-    ) {
+
+    #print Dumper \@props;
+    my @bin_props;
+    my @bin_prop_defines;
+    my %files;
+    foreach my $key (sort {    $a =~ /!/ <=> $b =~ /!/
+                            or length $a <=> length $b
+                            or $a cmp $b
+                          } keys %utf8::loose_to_file_of,
+                            keys %utf8::stricter_to_file_of
+                            )
+    {
+        my $file = $utf8::loose_to_file_of{$key};
+        $file = $utf8::stricter_to_file_of{$key} unless defined $file;
+        my $inverted = $file =~ s/!//;
+
+        # We don't handled deprecated properties, leaving them for the swash
+        # handling code
+        next if grep { $file eq $_ } keys %utf8::why_deprecated;
+
+        my @this_defines;
+        my ($base, $remainder) = $key =~ / ( [^=]* ) ( =? .*) /x;
+        if (exists $prop_name_aliases{$base}) {
+            print STDERR __LINE__, $base, Dumper $prop_name_aliases{$base};
+            foreach my $alias (@{$prop_name_aliases{$base}}) {
+                next if $remainder eq "" &&  grep { $alias eq $_ } keys %utf8::loose_property_to_file_of;
+                my $new_entry = $alias . $remainder;
+                push @this_defines, $new_entry unless grep { $_ eq $new_entry } @this_defines;
+            }
+        }
+
+        print STDERR __LINE__, $base, Dumper \@this_defines;
+
+        if (exists $files{$file}) {
+            push @this_defines, $key;
+        }
+        else {
+            warn "$key is inverted!!!" if $inverted;
+            push @bin_props, uc $key;
+            push @keywords, $key unless grep { $key eq $_ } @keywords;
+            $files{$file} = $table_name_prefix . uc sanitize_name($key);
+        }
+
+        my $defined_to = "";
+        $defined_to .= "-" if $inverted;
+        $defined_to .= $files{$file};
+
+        foreach my $define (@this_defines) {
+            push @keywords, $define unless grep { $define eq $_ } @keywords;
+            push @bin_prop_defines, "#define " . $table_name_prefix . uc(sanitize_name($define)) . "   $defined_to";
+            print STDERR __LINE__, $bin_prop_defines[-1], "\n";
+        }
+    }
+    @bin_props = sort @bin_props;
+    print __LINE__, Dumper \@bin_props;
+    @bin_prop_defines = sort @bin_prop_defines;
+    #print Dumper \@bin_prop_defines;
+    push @props, @bin_props;
+
+    foreach my $prop (@props) {
+    #next unless $prop =~ /ahex/;
+    print STDERR $prop, "\n";
 
         # For the Latin1 properties, we change to use the eXtended version of the
         # base property, then go through the result and get rid of everything not
@@ -2130,6 +2217,11 @@ for my $charset (get_supported_code_pages()) {
         my $extra_enums = "";
         $extra_enums = $1 if $prop_name =~ s/, ( .* ) //x;
         my $lookup_prop = $prop_name;
+        $prop_name = sanitize_name($prop_name);
+        print STDERR __LINE__, $lookup_prop, "\n";
+        #print STDERR join " ", @bin_props, "\n";
+        $prop_name = $table_name_prefix . $prop_name if grep { lc $lookup_prop eq lc $_ } @bin_props;
+        print STDERR __LINE__, $prop_name, "\n";
         my $l1_only = ($lookup_prop =~ s/^L1Posix/XPosix/
                        or $lookup_prop =~ s/^L1//);
         my $nonl1_only = 0;
@@ -2169,8 +2261,12 @@ for my $charset (get_supported_code_pages()) {
                     # in scalar context to differentiate
                     my $count = prop_invlist($lookup_prop,
                                              '_perl_core_internal_ok');
+                    if (defined $count) {
+                        # Short-circuit an empty inversion list.
+                        output_invlist($prop_name, \@invlist, $charset);
+                        next;
+                    }
                     die "Could not find inversion list for '$lookup_prop'"
-                                                          unless defined $count;
                 }
                 else {
                     @invlist = @$list_ref;
@@ -2180,14 +2276,39 @@ for my $charset (get_supported_code_pages()) {
                     $maps_to_code_point = $map_format =~ / a ($ | [^r] ) /x;
                     $to_adjust = $map_format =~ /a/;
                 }
+
+                if ($lookup_prop !~ /Perl/ && ! $to_adjust) {
+                    $|=1;
+                    next if $map_format =~ /ar/;
+                    ($prop_name) = prop_aliases($lookup_prop);
+                    $prop_name = $lookup_prop unless defined $prop_name;
+
+                    my @enums = prop_values($prop_name);
+                    next unless @enums && defined $enums[0];
+                    print STDERR __LINE__, $prop_name, ": cpmap=", $maps_to_code_point, "; format=", $map_format, "\n";
+                    #print Dumper \@enums;
+                    foreach my $value (@enums) {
+                        my $value_name;
+                        my @value_names = prop_value_aliases($prop_name, $value);
+
+                        foreach my $name (@value_names) {
+                            print STDERR "'$name'\n";
+                            next if $name =~ /\W/;
+
+                            $value_name = $name;
+                            last;
+                        }
+                        if (defined $value_name) {
+                            push @props, "${prop_name}__$value_name";
+                        }
+                        else {
+                            print "No good name for $lookup_prop: '" . join "', '", @value_names unless defined $value_name;
+                            print "'\n";
+                        }
+                    }
+                    next;
+                }
             }
-        }
-
-
-        # Short-circuit an empty inversion list.
-        if (! @invlist) {
-            output_invlist($prop_name, \@invlist, $charset);
-            next;
         }
 
         # Re-order the Unicode code points to native ones for this platform.
@@ -2479,7 +2600,27 @@ for my $charset (get_supported_code_pages()) {
         output_invlist($prop_name, \@invlist, $charset);
         output_invmap($prop_name, \@invmap, $lookup_prop, $map_format, $map_default, $extra_enums, $charset) if @invmap;
     }
+
+    switch_pound_if ('binary_property_tables', [ 'PERL_IN_UTF8_C',
+                                                 'PERL_IN_UNI_KEYWORDS_C',
+                                               ]);
+
+    print $out_fh "\ntypedef enum {\n\tPERL_BIN_PLACEHOLDER = 0,\n\t";
+    print $out_fh join ",\n\t", sort values %files;
+    print $out_fh "\n";
+    print $out_fh "} ${table_name_prefix}enum;\n";
+    print $out_fh "\n", join "\n", @bin_prop_defines, "\n";
+
+    switch_pound_if ('binary_property_index_table', 'PERL_IN_UTF8_C' );
+
+    print $out_fh "\nstatic const UV * const PL_uni_prop_ptrs\[] = {\n";
+    print $out_fh "\tNULL,\t/* Placeholder */\n";
+    print $out_fh join "_invlist,\n", sort values %files;
+    print $out_fh "_invlist\n";
+    print $out_fh "};\n";
+
     end_file_pound_if;
+
     print $out_fh "\n" . get_conditional_compile_line_end();
     last;
 }
@@ -2516,3 +2657,52 @@ my @sources = qw(regen/mk_invlists.pl
 }
 
 read_only_bottom_close_and_rename($out_fh, \@sources);
+
+#use Devel::Tokenizer::C;
+require '/usr/local/share/perl/5.24.1/Devel/Tokenizer/C.pm';
+
+sub token_name
+{
+    my $name = sanitize_name(shift);
+    warn "$name contains non-word" if $name =~ /\W/a;
+
+    return "return $table_name_prefix\U$name;\n"
+}
+
+my $t = Devel::Tokenizer::C->new(TokenFunc => \&token_name,
+                                 StringLength  => 'len',
+                                 Strategy      => 'narrow',
+                                 TokenEnd      =>  undef,
+                                 UnknownCode   => 'return 0;',
+        );
+ 
+print STDERR __LINE__, Dumper \@keywords;
+$t->add_tokens(lc $_) for @keywords;
+ 
+my $keywords_fh = open_new('uni_keywords.c', '>',
+		  {style => '*', by => 'regen/mk_invlists.pl',
+                  from => "Unicode::UCD"});
+
+print $keywords_fh <<EOF;
+
+#define PERL_IN_UNI_KEYWORDS_C
+
+#include "EXTERN.h"
+#include "perl.h"
+
+int
+Perl_uniprop_lookup(const char * tokstr, const Size_t len)
+{
+
+    PERL_ARGS_ASSERT_UNIPROP_LOOKUP;
+
+EOF
+
+print $keywords_fh $t->generate;
+
+print $keywords_fh <<EOF;
+
+}
+EOF
+
+read_only_bottom_close_and_rename($keywords_fh, \@sources);
