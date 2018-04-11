@@ -86,6 +86,49 @@ foreach my $name (sort keys %utf8::loose_property_name_of) {
     push @{$prop_name_aliases{$canonical}},  $name if $canonical ne $name;
 }
 
+my %keep_together = (
+                        assigned => 1,
+                        ascii => 1,
+                        cased => 1,
+                        vertspace => 1,
+                        xposixalnum => 1,
+                        xposixalpha => 1,
+                        xposixblank => 1,
+                        xposixcntrl => 1,
+                        xposixdigit => 1,
+                        xposixgraph => 1,
+                        xposixlower => 1,
+                        xposixprint => 1,
+                        xposixpunct => 1,
+                        xposixspace => 1,
+                        xposixupper => 1,
+                        xposixword => 1,
+                        xposixxdigit => 1,
+                        posixalnum => 1,
+                        posixalpha => 1,
+                        posixblank => 1,
+                        posixcntrl => 1,
+                        posixdigit => 1,
+                        posixgraph => 1,
+                        posixlower => 1,
+                        posixprint => 1,
+                        posixpunct => 1,
+                        posixspace => 1,
+                        posixupper => 1,
+                        posixword => 1,
+                        posixxdigit => 1,
+                        _perl_any_folds => 1,
+                        _perl_folds_to_multi_char => 1,
+                        _perl_idstart => 1,
+                        _perl_idcont => 1,
+                        _perl_charname_begin => 1,
+                        _perl_charname_continue => 1,
+                        _perl_problematic_locale_foldeds_start => 1,
+                        _perl_problematic_locale_folds => 1,
+                        _perl_quotemeta => 1,
+                    );
+
+# XXX use this
 sub uniques {
     # Returns non-duplicated input values.  From "Perl Best Practices:
     # Encapsulated Cleverness".  p. 455 in first edition.
@@ -2140,56 +2183,117 @@ for my $charset (get_supported_code_pages()) {
     #print Dumper \@props;
     my @bin_props;
     my @bin_prop_defines;
-    my %files;
-    foreach my $key (sort {    $a =~ /!/ <=> $b =~ /!/
-                            or length $a <=> length $b
-                            or $a cmp $b
-                          } keys %utf8::loose_to_file_of,
-                            keys %utf8::stricter_to_file_of
-                            )
-    {
-        my $file = $utf8::loose_to_file_of{$key};
-        $file = $utf8::stricter_to_file_of{$key} unless defined $file;
-        my $inverted = $file =~ s/!//;
+    my %enums;
+    my @deprecated_messages = "";   # Element [0] is a placeholder
+    my %deprecated_tags;
+    
+    foreach my $property (sort
+            {    exists $keep_together{lc $b} <=> exists $keep_together{lc $a}
+              or $a =~ /!/ <=> $b =~ /!/
+              or length $a <=> length $b
+              or $a cmp $b
+            }   keys %utf8::loose_to_file_of,
+                keys %utf8::stricter_to_file_of
+    ) {
+        print STDERR __LINE__, ": $property\n";
 
-        # We don't handled deprecated properties, leaving them for the swash
-        # handling code
-        next if grep { $file eq $_ } keys %utf8::why_deprecated;
+        # These two hashes map properties to values that can be considered to
+        # be checksums.  If two properties have the same checksum, they have
+        # identical entries.  Otherwise their entries differ in some way.
+        my $tag = $utf8::loose_to_file_of{$property};
+        $tag = $utf8::stricter_to_file_of{$property} unless defined $tag;
 
-        my @this_defines;
-        my ($base, $remainder) = $key =~ / ( [^=]* ) ( =? .*) /x;
-        if (exists $prop_name_aliases{$base}) {
-            print STDERR __LINE__, $base, Dumper $prop_name_aliases{$base};
-            foreach my $alias (@{$prop_name_aliases{$base}}) {
-                next if $remainder eq "" &&  grep { $alias eq $_ } keys %utf8::loose_property_to_file_of;
-                my $new_entry = $alias . $remainder;
-                push @this_defines, $new_entry unless grep { $_ eq $new_entry } @this_defines;
+        # The tag may contain an '!' meaning it is identical to the one formed
+        # by removing the !, except that it is inverted.
+        my $inverted = $tag =~ s/!//;
+
+        # This list of 'prop=value' entries that this single entry expands to
+        my @this_entries;
+
+        # Split 'property=value' on the equals sign, with $lhs being the whole
+        # thing if there is no '='
+        my ($lhs, $rhs) = $property =~ / ( [^=]* ) ( =? .*) /x;
+
+        # $lhs then becomes the property name.  See if there are any synonyms
+        # for this property.
+        if (exists $prop_name_aliases{$lhs}) {
+
+            # If so, do the combinatorics so that a new entry is added for
+            # each legal property combined with the property value (which is
+            # $rhs)
+            print STDERR __LINE__, $lhs, Dumper $prop_name_aliases{$lhs};
+            foreach my $alias (@{$prop_name_aliases{$lhs}}) {
+
+                # But, there are some ambiguities, like 'script' is a synonym
+                # for 'sc', and 'sc' can stand alone, meaning something
+                # entirely different than 'script'.  'script' cannot stand
+                # alone.  Don't add if the potential new lhs is in the hash of
+                # stand-alone properties.
+                next if $rhs eq "" &&  grep { $alias eq $_ }
+                                        keys %utf8::loose_property_to_file_of;
+
+                my $new_entry = $alias . $rhs;
+                push @this_entries, $new_entry
+                                unless grep { $_ eq $new_entry } @this_entries;
             }
         }
 
-        print STDERR __LINE__, $base, Dumper \@this_defines;
+        print STDERR __LINE__, $lhs, Dumper \@this_entries;
 
-        if (exists $files{$file}) {
-            push @this_defines, $key;
+        # Above, we added the synonyms for the base entry we're now
+        # processing.  But we haven't dealt with it yet.  If we already have a
+        # property with the identical characteristics, this becomes just a
+        # synonym for it.
+        if (exists $enums{$tag}) {
+            push @this_entries, $property;
         }
-        else {
-            warn "$key is inverted!!!" if $inverted;
-            push @bin_props, uc $key;
-            push @keywords, $key unless grep { $key eq $_ } @keywords;
-            $files{$file} = $table_name_prefix . uc sanitize_name($key);
+        else { # Otherwise, create a new entry.
+
+            # Add to the list of properties to generate inversion lists for.
+            push @bin_props, uc $property;
+
+            # Create a rule for the parser
+            push @keywords, $property unless grep { $property eq $_ } @keywords;
+
+            # And create an enum for it.
+            $enums{$tag} = $table_name_prefix . uc sanitize_name($property);
+
+            # Some properties are deprecated.  This hash tells us so, and the
+            # warning message to raise if they are used.
+            if (exists $utf8::why_deprecated{$tag}) {
+                $deprecated_tags{$enums{$tag}} = scalar @deprecated_messages;
+                push @deprecated_messages, $utf8::why_deprecated{$tag};
+            }
+
+            # Our sort above should have made sure that we see the
+            # non-inverted version first, but this makes sure.
+            warn "$property is inverted!!!" if $inverted;
         }
 
+        # Everything else is #defined to be the base enum, inversion is
+        # indicated by negating the value.
         my $defined_to = "";
         $defined_to .= "-" if $inverted;
-        $defined_to .= $files{$file};
+        $defined_to .= $enums{$tag};
 
-        foreach my $define (@this_defines) {
+        # Go through the entries that evaluate to this.
+        foreach my $define (@this_entries) {
+
+            # There is a rule for the parser for each.
             push @keywords, $define unless grep { $define eq $_ } @keywords;
-            push @bin_prop_defines, "#define " . $table_name_prefix . uc(sanitize_name($define)) . "   $defined_to";
+
+            # And a #define for each to this.
+            push @bin_prop_defines, "#define "
+                                  . $table_name_prefix
+                                  . uc(sanitize_name($define))
+                                  . "   $defined_to";
             print STDERR __LINE__, $bin_prop_defines[-1], "\n";
         }
     }
-    @bin_props = sort @bin_props;
+    print __LINE__, Dumper \@bin_props;
+    @bin_props = sort {  exists $keep_together{lc $b} <=> exists $keep_together{lc $a}
+                       or $a cmp $b
+                      } @bin_props;
     print __LINE__, Dumper \@bin_props;
     @bin_prop_defines = sort @bin_prop_defines;
     #print Dumper \@bin_prop_defines;
@@ -2601,27 +2705,55 @@ for my $charset (get_supported_code_pages()) {
         output_invmap($prop_name, \@invmap, $lookup_prop, $map_format, $map_default, $extra_enums, $charset) if @invmap;
     }
 
+    switch_pound_if ('binary_property_tables', 'PERL_IN_UTF8_C');
+
+    if (@deprecated_messages) {
+        print $out_fh "\nconst char * deprecated_property_msgs[] = {\n\t\"";
+        print $out_fh join "$_\",\n\t\"", @deprecated_messages;
+        print $out_fh "\"\n};\n";
+    }
+
     switch_pound_if ('binary_property_tables', [ 'PERL_IN_UTF8_C',
                                                  'PERL_IN_UNI_KEYWORDS_C',
                                                ]);
 
+    print STDERR Dumper \@deprecated_messages;
+    print STDERR Dumper \%deprecated_tags;
+    my @enums = sort values %enums;
+    my @invlist_names = map { "${_}_invlist" } @enums;
+    my $seen_deprecated = 0;
+    foreach my $enum (@enums) {
+        if (grep { $_ eq $enum } keys %deprecated_tags) {
+            my $revised_enum = "${enum}_perl_aux";
+            if (! $seen_deprecated) {
+                $seen_deprecated = 1;
+                print $out_fh "\n";
+            }
+            print $out_fh "#define $enum ($revised_enum + (MAX_UNI_KEYWORD_INDEX * $deprecated_tags{$enum}))\n";
+            $enum = $revised_enum;
+            print STDERR __LINE__, ": $enum\n";
+        }
+    }
+
     print $out_fh "\ntypedef enum {\n\tPERL_BIN_PLACEHOLDER = 0,\n\t";
-    print $out_fh join ",\n\t", sort values %files;
+    print $out_fh join ",\n\t", @enums;
     print $out_fh "\n";
-    print $out_fh "} ${table_name_prefix}enum;\n";
+    print $out_fh "} binary_invlist_enum;\n";
+    print $out_fh "\n#define MAX_UNI_KEYWORD_INDEX $enums[-1]\n";
     print $out_fh "\n", join "\n", @bin_prop_defines, "\n";
 
     switch_pound_if ('binary_property_index_table', 'PERL_IN_UTF8_C' );
 
     print $out_fh "\nstatic const UV * const PL_uni_prop_ptrs\[] = {\n";
-    print $out_fh "\tNULL,\t/* Placeholder */\n";
-    print $out_fh join "_invlist,\n", sort values %files;
-    print $out_fh "_invlist\n";
+    print $out_fh "\tNULL,\t/* Placeholder */\n\t";
+    print $out_fh join ",\n\t", @invlist_names;
+    print $out_fh "\n";
     print $out_fh "};\n";
 
     end_file_pound_if;
 
     print $out_fh "\n" . get_conditional_compile_line_end();
+    # XXX Need to reset keywords
     last;
 }
 

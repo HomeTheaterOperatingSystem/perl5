@@ -5619,6 +5619,7 @@ Perl_re_printf( aTHX_  "LHS=%" UVuf " RHS=%" UVuf "\n",
                     /* FALLTHROUGH */
 		case POSIXA:
                     assert(FLAGS(scan) != _CC_ASCII);
+                    /* XXX can have an array for non-X, and use that directly */
                     _invlist_intersection(PL_XPosix_ptrs[FLAGS(scan)],
                                           PL_XPosix_ptrs[_CC_ASCII],
                                           &my_invlist);
@@ -18015,6 +18016,7 @@ S_regclass(pTHX_ RExC_state_t *pRExC_state, I32 *flagp, U32 depth,
         if (AT_LEAST_ASCII_RESTRICTED) {
 
             /* Under /a and /aa, nothing above ASCII matches these */
+            /* XXX can have an array for non-X, and use that directly, maybe */
             if (posixes) {
                 _invlist_intersection(posixes,
                                     PL_XPosix_ptrs[_CC_ASCII],

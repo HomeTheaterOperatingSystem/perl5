@@ -6095,6 +6095,7 @@ Perl_parse_uniprop_string(pTHX_ const char * const name, const Size_t len, const
             return NULL;
         }
 
+        /* Unclear XXX if this is correct.  simple ones already have 'is' rules.  Why not compound? */
         starts_with_In_or_Is = true;
     }
 
@@ -6122,14 +6123,17 @@ Perl_parse_uniprop_string(pTHX_ const char * const name, const Size_t len, const
         *invert = FALSE;
     }
 
-#define MAX_UNI_KEYWORD_INDEX 1000000
+    /* Out-of band indices indicate a deprecated property.  The proper index is
+     * modulo it and the table size.  And dividing by the table size yields
+     * an offset into a table constructed to contain the corresponding warning
+     * message */
     if (table_index > MAX_UNI_KEYWORD_INDEX) {
-        table_index -= MAX_UNI_KEYWORD_INDEX;
-        /*if ($utf8::why_deprecated{$file}) {
-            *
-            warnings::warnif('deprecated', "Use of '$type' in \\p{} or \\P{} is deprecated because: $utf8::why_deprecated{$file};");
-        }
-        */
+        Size_t warning_offset = table_index / MAX_UNI_KEYWORD_INDEX;
+        table_index %= MAX_UNI_KEYWORD_INDEX;
+        /* XXX should be WARN_REGEXP Change in 5.29 */
+        Perl_ck_warner_d(aTHX_ packWARN(WARN_DEPRECATED),
+                "Use of '%.*s' in \\p{} or \\P{} is deprecated because: %s",
+                (int) len, name, deprecated_property_msgs[warning_offset]);
     }
 
     if (to_fold) {

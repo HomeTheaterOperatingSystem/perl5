@@ -768,7 +768,7 @@ AMp	|UV	|to_uni_title	|UV c|NN U8 *p|NN STRLEN *lenp
 ADMpR	|bool	|isIDFIRST_lazy	|NN const char* p
 ADMpR	|bool	|isALNUM_lazy	|NN const char* p
 p	|void	|init_uniprops
-Ep	|SV *	|parse_uniprop_string|NN const char * const name	   \
+EpX	|SV *	|parse_uniprop_string|NN const char * const name	   \
 				     |const Size_t len			   \
 				     |const bool to_fold		   \
 				     |NN bool * invert
